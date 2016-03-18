@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 from pprint import pprint
+import pexpect
 import video_convert_gui
 
 
@@ -157,7 +158,7 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
 
     def create_file_list(self, directory, recursiveBool, reconvertBool, thumbnailsBool):
         print('create_file_list_start')
-        self.set_status('Step 1: Create File List')
+        self.set_status('Step 1: Creating File List')
         self.progressBar_Current.setRange(0, 0)
         self.label_CurrentPercent.setText('---')
         self.progressBar_All.setRange(0, 5)
@@ -181,7 +182,7 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
 
     def create_file_list_finished(self):
         print('create_file_list_finished')
-        self.set_status('Step 1: Create File List - Complete')
+        self.set_status('Step 1: Creating File List - Complete')
         self.progressBar_Current.setRange(0, 100)
 
         # Start the get_media_info task
@@ -192,7 +193,7 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
     # Start get media info functions
 
     def get_media_info(self):
-        self.set_status('Step 2: Get Media Info')
+        self.set_status('Step 2: Getting Media Info')
 
         self.get_media_info_task = RunGetMediaInfo(self.file_list_reconvert, self.mediainfo_path)
         self.get_media_info_task.task_result.connect(self.get_media_info_results)
@@ -212,7 +213,7 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
     def get_media_info_finished(self):
         print('\n\nget_media_info_finished')
         self.progressBar_Current.setRange(0, 100)
-        self.set_status('Step 2: Get Media Info - Complete')
+        self.set_status('Step 2: Getting Media Info - Complete')
 
         # Start the number of frames task
         self.get_number_frames()
@@ -222,7 +223,7 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
     # Start get number of frames functions
 
     def get_number_frames(self):
-        self.set_status('Step 3: Get Number of Frames')
+        self.set_status('Step 3: Getting Number of Frames')
 
         self.get_number_frames_task = RunGetNumFrames(self.file_list_reconvert, self.ffprobe_path)
         self.get_number_frames_task.task_result.connect(self.get_number_frames_results)
@@ -244,7 +245,7 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
 
     def get_number_frames_finished(self):
         print('\n\nget_media_info_finished')
-        self.set_status('Step 3: Get Number of Frames - Complete')
+        self.set_status('Step 3: Getting Number of Frames - Complete')
         self.progressBar_Current.setRange(0, 100)
 
         # Start the create mp4 function
@@ -255,7 +256,7 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
     # Start create mp4 functions
 
     def create_mp4(self):
-        self.set_status('Step 4: Create MP4 Files')
+        self.set_status('Step 4: Creating MP4 Files')
 
         self.create_mp4_task = RunCreateMP4(self.file_list_reconvert, self.ffmpeg_path)
         self.create_mp4_task.task_finished.connect(self.create_mp4_finished)
@@ -269,7 +270,7 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
 
     def create_mp4_finished(self):
         print('\n\ncreate_mp4_finished')
-        self.set_status('Step 4: Create MP4 - Complete')
+        self.set_status('Step 4: Creating MP4 - Complete')
     # End create mp4 functions
 
 
@@ -310,17 +311,17 @@ class RunCreateFileList(QtCore.QThread):
         self.task_result.emit(['self.file_list', self.file_list])
 
         if self.reconvertBool == QtCore.Qt.Checked:
-            self.file_list_reconvert = [x for x in self.file_list if self.cull_list(x, '.mp4')]
-        else:
             self.file_list_reconvert = self.file_list
+        else:
+            self.file_list_reconvert = [x for x in self.file_list if self.cull_list(x, '.mp4')]
 
         # Send a result back to the main thread
         self.task_result.emit(['self.file_list_reconvert', self.file_list_reconvert])
 
         if self.thumbnailsBool == QtCore.Qt.Checked:
-            self.file_list_thumbnails = [x for x in self.file_list if self.cull_list(x, '.jpg')]
-        else:
             self.file_list_thumbnails = self.file_list
+        else:
+            self.file_list_thumbnails = [x for x in self.file_list if self.cull_list(x, '.jpg')]
 
         # Send a result back to the main thread
         self.task_result.emit(['self.file_list_thumbnails', self.file_list_thumbnails])
@@ -491,34 +492,14 @@ class RunCreateMP4(QtCore.QThread):
 
             cmd = self.ffmpeg_path +  ' -i "' + f['name'] + '" ' + transpose + ' -strict experimental -metadata:s:v:0 rotate=0 "' + output + '"'
 
-
-            child = subprocess.Popen(cmd, shell=True, stderr=subprocess.PIPE)
-
-            data = []
-
-            while True:
-                out = str(child.stderr.read(1))
-                print(out)
-                if out == '' and child.poll() != None:
-                    break
-
-                data.append(out)
-                # print(data)
-                if out == b'\r':
-                    line = ''.join(data)
-                    line2 = line.split()
-                    print('line2', line2)
-
-                    try:
-                        if line2[0] == 'frame=':
-                            framecount = line2[1]
-
-                            curr_percent = float(framecount) / float(f['frames'])
-                            self.task_CurrentPercent.emit(curr_percent)
-                    except:
-                        pass
-
-                    data = []
+            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+            for line in process.stdout:
+                line_split = line.split()
+                if line_split[0] == 'frame=':
+                    curr_percent = float(line_split[1]) / float(f['frames'])
+                    if curr_percent > 1:
+                        curr_percent = 1
+                    self.task_CurrentPercent.emit(curr_percent)
 
             originaltime = os.path.getmtime(f['name'])
             os.utime(output, (originaltime, originaltime))

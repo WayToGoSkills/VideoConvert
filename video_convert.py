@@ -258,7 +258,9 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
     def create_mp4(self):
         self.set_status('Step 4: Creating MP4 Files')
 
-        self.create_mp4_task = RunCreateMP4(self.file_list_reconvert, self.ffmpeg_path)
+        stabilizeBool = self.checkBox_Stabilize.checkState()
+
+        self.create_mp4_task = RunCreateMP4(self.file_list_reconvert, self.ffmpeg_path, stabilizeBool)
         self.create_mp4_task.task_finished.connect(self.create_mp4_finished)
         self.create_mp4_task.task_folder.connect(self.set_folder)
         self.create_mp4_task.task_file.connect(self.set_file)
@@ -365,7 +367,8 @@ class RunGetMediaInfo(QtCore.QThread):
             for line in media_info:
                 try:
                     if line.split(' ')[0] == 'Rotation':
-                        rotation = line.split()[2][:-2]
+                        print(line.split())
+                        rotation = line.split()[2][:-1]
                         f['rotation'] = rotation
 
                     elif line.split(' ')[0] == 'Duration':
@@ -456,10 +459,11 @@ class RunCreateMP4(QtCore.QThread):
 
     task_CurrentPercent = QtCore.Signal(float)
 
-    def __init__(self, file_list, ffmpeg_path):
+    def __init__(self, file_list, ffmpeg_path, stabilize):
         QtCore.QThread.__init__(self)
         self.file_list = file_list
         self.ffmpeg_path = ffmpeg_path
+        self.stabilize = stabilize
 
     def run(self):
         print('RunCreateMP4')
@@ -490,16 +494,52 @@ class RunCreateMP4(QtCore.QThread):
                 elif f['rotation'] == '270':
                     transpose = '-vf "transpose=2"'
 
-            cmd = self.ffmpeg_path +  ' -i "' + f['name'] + '" ' + transpose + ' -strict experimental -metadata:s:v:0 rotate=0 "' + output + '"'
+            cmd = ''
+            if self.stabilize == QtCore.Qt.Checked:
+                # if transpose == '':
+                #     transpose = '-vf'
+                cmd = self.ffmpeg_path + ' -i "' + f['name'] + '" ' + transpose + ' -vf vidstabdetect=stepsize=6:shakiness=8:accuracy=9:result=transform_vectors.trf -f null -'
 
-            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-            for line in process.stdout:
-                line_split = line.split()
-                if line_split[0] == 'frame=':
-                    curr_percent = float(line_split[1]) / float(f['frames'])
-                    if curr_percent > 1:
-                        curr_percent = 1
-                    self.task_CurrentPercent.emit(curr_percent)
+                print(cmd)
+
+                process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                           universal_newlines=True)
+                for line in process.stdout:
+                    line_split = line.split()
+                    if line_split[0] == 'frame=':
+                        curr_percent = float(line_split[1]) / float(f['frames']) / 2
+                        if curr_percent > 1:
+                            curr_percent = 1
+                        self.task_CurrentPercent.emit(curr_percent)
+
+                cmd = self.ffmpeg_path + ' -i "' + f['name'] + '" -vf vidstabtransform=input=transform_vectors.trf:zoom=1:smoothing=30,unsharp=5:5:0.8:3:3:0.4 -vcodec libx264 -preset slow -tune film -crf 18 -acodec copy "' + output + '"'
+                print(cmd)
+
+                process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                               universal_newlines=True)
+                for line in process.stdout:
+                    line_split = line.split()
+                    if line_split[0] == 'frame=':
+                        curr_percent = 0.5 + float(line_split[1]) / float(f['frames']) / 2
+                        if curr_percent > 1:
+                            curr_percent = 1
+                        self.task_CurrentPercent.emit(curr_percent)
+
+                if os.path.isfile('transform_vectors.trf'):
+                    os.remove('transform_vectors.trf')
+
+
+            else:
+                cmd = self.ffmpeg_path + ' -i "' + f['name'] + '" ' + transpose + ' -strict experimental -metadata:s:v:0 rotate=0 "' + output + '"'
+
+                process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+                for line in process.stdout:
+                    line_split = line.split()
+                    if line_split[0] == 'frame=':
+                        curr_percent = float(line_split[1]) / float(f['frames'])
+                        if curr_percent > 1:
+                            curr_percent = 1
+                        self.task_CurrentPercent.emit(curr_percent)
 
             originaltime = os.path.getmtime(f['name'])
             os.utime(output, (originaltime, originaltime))

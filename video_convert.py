@@ -273,7 +273,36 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
     def create_mp4_finished(self):
         print('\n\ncreate_mp4_finished')
         self.set_status('Step 4: Creating MP4 - Complete')
+
+        # Run thumbnail function
+        self.create_thumbnails()
+
     # End create mp4 functions
+
+    # Start create thumbnail functions
+
+    def create_thumbnails(self):
+        self.set_status('Step 5: Creating Thumbnails')
+
+        recreatethumbsBool = self.checkBox_Thumbnails.checkState()
+
+        self.create_thumbnails_task = RunCreateThumbnails(self.file_list_thumbnails, self.mediainfo_path,
+                                                          self.ffmpeg_path, self.imagemagick_path,
+                                                          self.convert_path, self.composite_path, recreatethumbsBool)
+        self.create_thumbnails_task.task_finished.connect(self.create_thumbnails_finished)
+        self.create_thumbnails_task.task_folder.connect(self.set_folder)
+        self.create_thumbnails_task.task_file.connect(self.set_file)
+        self.create_thumbnails_task.task_AllFraction.connect(self.set_AllFraction)
+        self.create_thumbnails_task.task_AllPercent.connect(self.set_AllPercent)
+        self.create_thumbnails_task.task_CurrentPercent.connect(self.set_CurrentPercent)
+
+        self.create_thumbnails_task.start()
+
+    def create_thumbnails_finished(self):
+        print('\n\ncreate_thumbnails_finished')
+        self.set_status('Step 5: Creating Thumbnails - Complete')
+
+    # End create thumbnail functions
 
 
 class RunCreateFileList(QtCore.QThread):
@@ -547,6 +576,95 @@ class RunCreateMP4(QtCore.QThread):
             file_count += 1
 
         self.task_finished.emit()
+
+
+class RunCreateThumbnails(QtCore.QThread):
+    task_finished = QtCore.Signal()
+
+    task_folder = QtCore.Signal(str)
+    task_file = QtCore.Signal(str)
+
+    task_AllFraction = QtCore.Signal(str)
+    task_AllPercent = QtCore.Signal(float)
+
+    task_CurrentPercent = QtCore.Signal(float)
+
+    def __init__(self, file_list, media_info_path, ffmpeg_path, im_path, convert_path, composite_path, recreateThumbs):
+        QtCore.QThread.__init__(self)
+        self.file_list = file_list
+        self.media_info_path = media_info_path
+        self.ffmpeg_path = ffmpeg_path
+        self.imagemagick_path = im_path
+        self.convert_path = convert_path
+        self.composite_path = composite_path
+        self.recreateThumbs = recreateThumbs
+
+    def run(self):
+        print('RunCreateThumbnails')
+
+        file_count = 1
+
+        for f in self.file_list:
+            self.task_folder.emit(os.path.split(f['name'])[0])
+            self.task_file.emit(os.path.split(f['name'])[1])
+
+            percentage = float(file_count) / float(len(self.file_list))
+            self.task_AllFraction.emit(str(file_count) + ' / ' + str(len(self.file_list)))
+            self.task_AllPercent.emit(percentage)
+
+            output = os.path.splitext(f['name'])[0] + '.jpg'
+            converted_movie = os.path.splitext(f['name'])[0] + '.mp4'
+
+            # Remove file if it is found
+            # If recreate thumbnails checkbox is unchecked, the file should have already been removed from self.file_list
+            if os.path.isfile(output):
+                os.remove(output)
+
+            media_info = os.popen(self.media_info_path + ' "' + f['name'] + '"').readlines()
+
+            width = None
+            height = None
+
+            for line in media_info:
+                line_split = line.split(':')
+                try:
+                    if line_split[0].lower().rstrip() == 'width':
+                        width = line_split[1]
+                    elif line_split[0].lower().rstrip() == 'height':
+                        height = line_split[1]
+                except:
+                    pass
+
+            width = ''.join(width.split(' ')[1:-1])
+            height = ''.join(height.split(' ')[1:-1])
+
+            min_dimension = str(int(min(float(width), float(height))))
+
+            getphoto = self.ffmpeg_path + ' -i "' + converted_movie + '" -ss 00:00:01 -vframes 1 "' + output + '"'
+
+            os.system(getphoto)
+
+            im_command = ''
+            im_command2 = ''
+            if os.name == 'posix':
+                im_command = self.convert_path + ' play.png -resize ' + min_dimension + 'x' + min_dimension + ' play_temp.png'
+                im_command2 = self.composite_path + ' -gravity center play_temp.png "' + output + '" "' + output + '"'
+
+            else:
+                im_command = imagemagick_path + '\convert.exe play.png -resize ' + min_dimension + 'x' + min_dimension + ' play_temp.png'
+                im_command2 = imagemagick_path + '\composite.exe -gravity center play_temp.png "' + output + '" "' + output + '"'
+
+            os.system(im_command)
+            os.system(im_command2)
+            os.remove('play_temp.png')
+
+            originaltime = os.path.getmtime(f['name'])
+            os.utime(output, (originaltime, originaltime))
+
+            file_count += 1
+
+        self.task_finished.emit()
+
 
 ##############
 # TESTING

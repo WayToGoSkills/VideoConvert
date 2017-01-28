@@ -16,7 +16,7 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
         self.assign_widgets()
 
         # Set up variables
-        self.version = '0.3.0'
+        self.version = '0.4.0'
         self.setWindowTitle('VideoConvert ' + self.version)
         self.setWindowIcon(QtGui.QIcon('movie.png'))
 
@@ -176,6 +176,8 @@ class MainWindow(QtGui.QMainWindow, video_convert_gui.Ui_MainWindow):
             self.file_list_reconvert = result[1]
         elif result[0] == 'self.file_list_thumbnails':
             self.file_list_thumbnails = result[1]
+            print('\nself.file_list_thumbnails')
+            pprint(self.file_list_thumbnails)
         else:
             print('\nUnexpected value:')
             pprint(result)
@@ -320,6 +322,7 @@ class RunCreateFileList(QtCore.QThread):
         self.thumbnailsBool = thumbnailsBool
 
         self.file_list = []
+        self.mp4_file_list = []
         self.file_list_reconvert = []
         self.file_list_thumbnails = []
 
@@ -349,10 +352,25 @@ class RunCreateFileList(QtCore.QThread):
         # Send a result back to the main thread
         self.task_result.emit(['self.file_list_reconvert', self.file_list_reconvert])
 
-        if self.thumbnailsBool == QtCore.Qt.Checked:
-            self.file_list_thumbnails = self.file_list
+        # Re-run file list to get all .mp4 files for thumbnail generation
+        video_ext = ['.avi', '.mpg', '.mov', '.wmv', '.mp4']
+
+        if self.recursiveBool == QtCore.Qt.Checked:
+            for root, sub_folders, files in os.walk(self.directory):
+                for f in files:
+                    if os.path.splitext(f)[1].lower() in video_ext:
+                        self.mp4_file_list.append({'name': os.path.realpath(os.path.join(root, f))})
+
         else:
-            self.file_list_thumbnails = [x for x in self.file_list if self.cull_list(x, '.jpg')]
+            filenames = next(os.walk(self.directory))[2]
+            for f in filenames:
+                if os.path.splitext(f)[1].lower() in video_ext:
+                    self.mp4_file_list.append({'name': os.path.realpath(os.path.join(root, f))})
+
+        if self.thumbnailsBool == QtCore.Qt.Checked:
+            self.file_list_thumbnails = self.mp4_file_list
+        else:
+            self.file_list_thumbnails = [x for x in self.mp4_file_list if self.cull_list(x, '.jpg')]
 
         # Send a result back to the main thread
         self.task_result.emit(['self.file_list_thumbnails', self.file_list_thumbnails])
@@ -541,18 +559,23 @@ class RunCreateMP4(QtCore.QThread):
                             curr_percent = 1
                         self.task_CurrentPercent.emit(curr_percent)
 
-                cmd = self.ffmpeg_path + ' -i "' + f['name'] + '" -vf vidstabtransform=input=transform_vectors.trf:zoom=1:smoothing=30,unsharp=5:5:0.8:3:3:0.4 -vcodec libx264 -preset slow -tune film -crf 18 -acodec copy "' + output + '"'
+                # cmd = self.ffmpeg_path + ' -i "' + f['name'] + '" -vf vidstabtransform=input=transform_vectors.trf:zoom=1:smoothing=30,unsharp=5:5:0.8:3:3:0.4 -vcodec libx264 -preset slow -tune film -crf 18 -acodec copy "' + output + '"'
+                cmd = self.ffmpeg_path + ' -i "' + f['name'] + '" -vf vidstabtransform=input=transform_vectors.trf:zoom=1:smoothing=30,unsharp=5:5:0.8:3:3:0.4 -c:v libx265 -preset slow -crf 28 -c:a aac -b:a 128k "' + output + '"'
                 print(cmd)
 
                 process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                                universal_newlines=True)
                 for line in process.stdout:
                     line_split = line.split()
-                    if line_split[0] == 'frame=':
-                        curr_percent = 0.5 + float(line_split[1]) / float(f['frames']) / 2
-                        if curr_percent > 1:
-                            curr_percent = 1
-                        self.task_CurrentPercent.emit(curr_percent)
+                    try:
+                        if line_split[0] == 'frame=':
+                            curr_percent = 0.5 + float(line_split[1]) / float(f['frames']) / 2
+                    except:
+                        pass
+
+                    if curr_percent > 1:
+                        curr_percent = 1
+                    self.task_CurrentPercent.emit(curr_percent)
 
                 if os.path.isfile('transform_vectors.trf'):
                     os.remove('transform_vectors.trf')
